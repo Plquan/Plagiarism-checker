@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kiểm tra đạo văn</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+</head>
+<body>
+    <div class="container mt-5">
+        <h2 class="text-center">Kiểm tra đạo văn</h2>
+        <form id="uploadForm" enctype="multipart/form-data">
+            <div class="mb-3">
+                <label for="file" class="form-label">Chọn file .docx để kiểm tra</label>
+                <input type="file" class="form-control" id="file" name="file" accept=".docx" required>
+            </div>
+            <button type="submit" class="btn btn-primary">Kiểm tra</button>
+        </form>
+
+        <div id="result" class="mt-4">
+            <h4>Kết quả kiểm tra:</h4>
+            <ul id="resultList" class="list-group"></ul>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', async function(event) {
+            event.preventDefault();
+            
+            const formData = new FormData();
+            const fileInput = document.getElementById('file');
+            if (!fileInput.files.length) {
+                alert('Vui lòng chọn một tệp!');
+                return;
+            }
+            formData.append('file', fileInput.files[0]);
+
+            try {
+                const response = await axios.post('http://localhost:8000/check_plagiarism', formData, {
+                    headers: { 'Content-Type': 'multipart/form-data' }
+                });
+
+                const data = response.data;
+                const resultList = document.getElementById('resultList');
+                resultList.innerHTML = '';
+
+                if (!data.results || data.results.length === 0) {
+                    resultList.innerHTML = '<li class="list-group-item">Không tìm thấy tài liệu tham chiếu.</li>';
+                } else {
+                    data.results.forEach(result => {
+                        const listItem = document.createElement('li');
+                        listItem.className = 'list-group-item';
+                        listItem.innerHTML = `<strong>${result.document}</strong>: ${Math.round(result.plagiarism_score * 100)}% đạo văn`;
+                        resultList.appendChild(listItem);
+                    });
+                }
+            } catch (error) {
+                console.error('Lỗi:', error);
+                alert('Có lỗi xảy ra, vui lòng thử lại.');
+            }
+        });
+    </script>
+</body>
+</html>
