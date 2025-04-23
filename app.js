@@ -1,4 +1,3 @@
-// app.js
 const express       = require('express');
 const multer        = require('multer');
 const path          = require('path');
@@ -89,29 +88,13 @@ async function extractTextFromDocx(filePath) {
   return result.value;
 }
 
-async function scrapeText(url) {
-  try {
-    const response = await axios.get(url);
-    const $ = cheerio.load(response.data);
-    $('script, style, nav, footer, header, aside').remove();
-    const text = $('body').text() || $('article').text() || $('main').text() || $('.content').text();
-    return text.replace(/\s+/g, ' ').trim();
-  } catch (error) {
-    console.error(`Error scraping ${url}:`, error.message);
-    return '';
-  }
-}
 
-// Hàm tìm kiếm Wikipedia đơn giản hơn
+// Hàm tìm kiếm Wikipedia
 async function searchWikipedia(query, language = 'vi') {
   try {
-    // Tạo URL tìm kiếm với từ khóa query
     const searchUrl = `https://${language}.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&utf8=&origin=*`;
-    // Gửi yêu cầu GET đến API
     const response = await axios.get(searchUrl);
-    // Lấy kết quả tìm kiếm
     const searchResults = response.data.query.search;
-    // Trả về 5 kết quả tìm kiếm đầu tiên
     return searchResults.slice(0, 5).map(result => ({
       title: result.title,
       pageid: result.pageid,
@@ -124,25 +107,50 @@ async function searchWikipedia(query, language = 'vi') {
   }
 }
 
+// Hàm mới: Trích xuất n-gram từ văn bản
+function extractNgrams(text, n = 2) {
+  const words = text.toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, '') // giữ lại chữ cái, số và khoảng trắng
+    .split(/\s+/)
+    .filter(word => word.length > 3); // lọc các từ có ý nghĩa (>3 ký tự)
+  
+  if (words.length < n) return words;
+  
+  const ngrams = [];
+  for (let i = 0; i <= words.length - n; i++) {
+    ngrams.push(words.slice(i, i + n).join(' '));
+  }
+  return ngrams;
+}
+
+// Hàm mới: Đếm tần suất n-gram trong văn bản
+function countNgramFrequency(text, n = 2) {
+  const ngrams = extractNgrams(text, n);
+  const frequency = {};
+  
+  ngrams.forEach(ngram => {
+    frequency[ngram] = (frequency[ngram] || 0) + 1;
+  });
+  
+  return frequency;
+}
+
+// Hàm mới: Trích xuất từ khóa từ văn bản dựa trên n-gram phổ biến
+function extractKeywords(text, n = 2, topK = 3) {
+  const frequency = countNgramFrequency(text, n);
+  
+  // Sắp xếp theo tần suất và lấy top K n-gram phổ biến nhất
+  const sortedNgrams = Object.entries(frequency)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topK)
+    .map(entry => entry[0]);
+  
+  return sortedNgrams.join(' ').substring(0, 100); // Giới hạn độ dài từ khóa
+}
+
 // Home
 app.get('/', (req, res) => {
   res.render('index', { title: 'Trang chủ', message: 'Kiểm tra đạo văn trực tuyến' });
-});
-
-// Endpoint tìm kiếm trên Wikipedia API
-app.get('/search_wikipedia', async (req, res) => {
-  try {
-    const { query, language } = req.query;
-    if (!query) {
-      return res.status(400).json({ error: 'Vui lòng cung cấp từ khóa tìm kiếm' });
-    }
-    
-    const results = await searchWikipedia(query, language || 'vi');
-    res.json({ results });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Đã có lỗi xảy ra: ' + err.message });
-  }
 });
 
 // Check plagiarism (file)
@@ -159,15 +167,14 @@ app.post('/check_plagiarism', upload.single('file'), async (req, res) => {
     // Sử dụng từ khóa tìm kiếm từ nội dung văn bản
     let keywords = req.body.keywords;
     
-    // Nếu không có từ khóa, lấy các từ quan trọng từ nội dung
+    // Nếu không có từ khóa, trích xuất từ khóa dựa trên n-gram
     if (!keywords) {
-      // Lấy 5-10 từ đầu tiên của văn bản làm từ khóa
-      keywords = inputText
-        .split(/\s+/)
-        .slice(0, 5)
-        .filter(word => word.length > 3)
-        .join(' ')
-        .substring(0, 100); // Giới hạn độ dài từ khóa
+      // Thử với bi-gram (n=2) trước
+      keywords = extractKeywords(inputText, 2, 3);
+      // Nếu không có kết quả, thử với từng từ riêng lẻ
+      if (!keywords) {
+        keywords = extractKeywords(inputText, 1, 5);
+      }
     }
     
     // Tìm kiếm trên Wikipedia
@@ -187,6 +194,7 @@ app.post('/check_plagiarism', upload.single('file'), async (req, res) => {
           fullResults.push({
             source: result.url,
             title: result.title,
+            keywords: keywords, // Thêm từ khóa vào kết quả để người dùng biết
             plagiarism_score: plagiarismScore(text, inputText)
           });
         }
@@ -214,13 +222,12 @@ app.post('/check_custom_text', async (req, res) => {
     // Sử dụng từ khóa được cung cấp hoặc trích xuất từ văn bản
     let searchKeywords = keywords;
     if (!searchKeywords) {
-      // Lấy 5-10 từ đầu tiên của văn bản làm từ khóa
-      searchKeywords = text
-        .split(/\s+/)
-        .slice(0, 5)
-        .filter(word => word.length > 3)
-        .join(' ')
-        .substring(0, 100); // Giới hạn độ dài từ khóa
+      // Trích xuất từ khóa dựa trên n-gram
+      searchKeywords = extractKeywords(text, 2, 3);
+      // Nếu không có kết quả, thử với từng từ riêng lẻ
+      if (!searchKeywords) {
+        searchKeywords = extractKeywords(text, 1, 5);
+      }
     }
     
     // Tìm kiếm trên Wikipedia
@@ -240,6 +247,7 @@ app.post('/check_custom_text', async (req, res) => {
           fullResults.push({
             source: result.url,
             title: result.title,
+            keywords: searchKeywords,
             plagiarism_score: plagiarismScore(articleText, text)
           });
         }
