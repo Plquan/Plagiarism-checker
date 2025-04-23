@@ -16,8 +16,8 @@ const PORT = 8000;
 
 // Middleware
 app.use(cors());
-app.use(express.json());               // parse application/json
-app.use(express.urlencoded({ extended: true })); // parse application/x-www-form-urlencoded
+app.use(express.json());             
+app.use(express.urlencoded({ extended: true })); 
 app.use(express.static('public'));
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
@@ -102,23 +102,47 @@ async function scrapeText(url) {
   }
 }
 
-async function scrapeMultipleUrls(urls) {
-  const results = [];
-  for (const url of urls) {
-    try {
-      new URL(url); // validate
-      const text = await scrapeText(url);
-      if (text) results.push({ url, text });
-    } catch {
-      console.warn(`Skipping invalid URL: ${url}`);
-    }
+// Hàm tìm kiếm Wikipedia đơn giản hơn
+async function searchWikipedia(query, language = 'vi') {
+  try {
+    // Tạo URL tìm kiếm với từ khóa query
+    const searchUrl = `https://${language}.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&utf8=&origin=*`;
+    // Gửi yêu cầu GET đến API
+    const response = await axios.get(searchUrl);
+    // Lấy kết quả tìm kiếm
+    const searchResults = response.data.query.search;
+    // Trả về 5 kết quả tìm kiếm đầu tiên
+    return searchResults.slice(0, 5).map(result => ({
+      title: result.title,
+      pageid: result.pageid,
+      snippet: result.snippet,
+      url: `https://${language}.wikipedia.org/?curid=${result.pageid}`
+    }));
+  } catch (error) {
+    console.error('Lỗi khi tìm kiếm Wikipedia:', error.message);
+    return [];
   }
-  return results;
 }
 
 // Home
 app.get('/', (req, res) => {
   res.render('index', { title: 'Trang chủ', message: 'Kiểm tra đạo văn trực tuyến' });
+});
+
+// Endpoint tìm kiếm trên Wikipedia API
+app.get('/search_wikipedia', async (req, res) => {
+  try {
+    const { query, language } = req.query;
+    if (!query) {
+      return res.status(400).json({ error: 'Vui lòng cung cấp từ khóa tìm kiếm' });
+    }
+    
+    const results = await searchWikipedia(query, language || 'vi');
+    res.json({ results });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Đã có lỗi xảy ra: ' + err.message });
+  }
 });
 
 // Check plagiarism (file)
@@ -132,59 +156,100 @@ app.post('/check_plagiarism', upload.single('file'), async (req, res) => {
     const inputText = await extractTextFromDocx(req.file.path);
     await fs.unlink(req.file.path);
 
-    let urlsToCheck = [];
+    // Sử dụng từ khóa tìm kiếm từ nội dung văn bản
+    let keywords = req.body.keywords;
     
-    // Sửa đổi đoạn này để xử lý đúng URLs
-    if (req.body.urls) {
+    // Nếu không có từ khóa, lấy các từ quan trọng từ nội dung
+    if (!keywords) {
+      // Lấy 5-10 từ đầu tiên của văn bản làm từ khóa
+      keywords = inputText
+        .split(/\s+/)
+        .slice(0, 5)
+        .filter(word => word.length > 3)
+        .join(' ')
+        .substring(0, 100); // Giới hạn độ dài từ khóa
+    }
+    
+    // Tìm kiếm trên Wikipedia
+    const wikipediaResults = await searchWikipedia(keywords);
+    
+    // Lấy nội dung của các bài viết để so sánh
+    const fullResults = [];
+    for (const result of wikipediaResults) {
+      const contentUrl = `https://vi.wikipedia.org/w/api.php?action=parse&pageid=${result.pageid}&prop=text&format=json&origin=*`;
       try {
-        // Kiểm tra nếu req.body.urls là chuỗi JSON
-        if (typeof req.body.urls === 'string') {
-          urlsToCheck = JSON.parse(req.body.urls);
-        } else {
-          urlsToCheck = Array.isArray(req.body.urls) ? req.body.urls : [req.body.urls];
+        const contentResponse = await axios.get(contentUrl);
+        if (contentResponse.data && contentResponse.data.parse && contentResponse.data.parse.text) {
+          const $ = cheerio.load(contentResponse.data.parse.text['*']);
+          $('table, .mw-editsection, .reference, script, style, #toc, .hatnote, .thumb').remove();
+          const text = $('body').text().replace(/\s+/g, ' ').trim();
+          
+          fullResults.push({
+            source: result.url,
+            title: result.title,
+            plagiarism_score: plagiarismScore(text, inputText)
+          });
         }
-      } catch (e) {
-        console.error("Lỗi khi phân tích URLs:", e);
-        urlsToCheck = [];
+      } catch (error) {
+        console.error(`Lỗi khi lấy nội dung trang ${result.title}:`, error.message);
       }
     }
     
-    // Nếu không có URLs hợp lệ, sử dụng URLs mặc định
-    if (!urlsToCheck || urlsToCheck.length === 0) {
-      urlsToCheck = [
-        'https://vi.wikipedia.org/wiki/Trang_Chính',
-        'https://vnexpress.net/',
-        'https://dantri.com.vn/'
-      ];
-    }
-
-    const scraped = await scrapeMultipleUrls(urlsToCheck);
-    const results = scraped.map(s => ({
-      source: s.url,
-      plagiarism_score: plagiarismScore(s.text, inputText)
-    }));
-    results.sort((a, b) => b.plagiarism_score - a.plagiarism_score);
-    res.json({ results });
+    fullResults.sort((a, b) => b.plagiarism_score - a.plagiarism_score);
+    res.json({ results: fullResults });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Đã có lỗi xảy ra: ' + err.message });
   }
 });
 
-// Check custom URLs (JSON)
-app.post('/check_custom_urls', async (req, res) => {
+// Check custom text
+app.post('/check_custom_text', async (req, res) => {
   try {
-    const { text, urls } = req.body;
-    if (!text || !urls || !Array.isArray(urls) || urls.length === 0) {
-      return res.status(400).json({ error: 'Cần cung cấp text và danh sách URL hợp lệ' });
+    const { text, keywords } = req.body;
+    if (!text) {
+      return res.status(400).json({ error: 'Cần cung cấp văn bản để kiểm tra' });
     }
-    const scraped = await scrapeMultipleUrls(urls);
-    let results = scraped.map(s => ({
-      source: s.url,
-      plagiarism_score: plagiarismScore(s.text, text)
-    }));
-    results.sort((a, b) => b.plagiarism_score - a.plagiarism_score);
-    res.json({ results });
+    
+    // Sử dụng từ khóa được cung cấp hoặc trích xuất từ văn bản
+    let searchKeywords = keywords;
+    if (!searchKeywords) {
+      // Lấy 5-10 từ đầu tiên của văn bản làm từ khóa
+      searchKeywords = text
+        .split(/\s+/)
+        .slice(0, 5)
+        .filter(word => word.length > 3)
+        .join(' ')
+        .substring(0, 100); // Giới hạn độ dài từ khóa
+    }
+    
+    // Tìm kiếm trên Wikipedia
+    const wikipediaResults = await searchWikipedia(searchKeywords);
+    
+    // Lấy nội dung của các bài viết để so sánh
+    const fullResults = [];
+    for (const result of wikipediaResults) {
+      const contentUrl = `https://vi.wikipedia.org/w/api.php?action=parse&pageid=${result.pageid}&prop=text&format=json&origin=*`;
+      try {
+        const contentResponse = await axios.get(contentUrl);
+        if (contentResponse.data && contentResponse.data.parse && contentResponse.data.parse.text) {
+          const $ = cheerio.load(contentResponse.data.parse.text['*']);
+          $('table, .mw-editsection, .reference, script, style, #toc, .hatnote, .thumb').remove();
+          const articleText = $('body').text().replace(/\s+/g, ' ').trim();
+          
+          fullResults.push({
+            source: result.url,
+            title: result.title,
+            plagiarism_score: plagiarismScore(articleText, text)
+          });
+        }
+      } catch (error) {
+        console.error(`Lỗi khi lấy nội dung trang ${result.title}:`, error.message);
+      }
+    }
+    
+    fullResults.sort((a, b) => b.plagiarism_score - a.plagiarism_score);
+    res.json({ results: fullResults });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Đã có lỗi xảy ra: ' + err.message });
