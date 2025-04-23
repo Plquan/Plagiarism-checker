@@ -1,3 +1,52 @@
-1. npm i
+Tóm tắt kỹ thuật kiểm tra đạo văn
+1. Đầu vào
+File DOCX (upload qua /check_plagiarism)
 
-run -> node app.js
+Văn bản thô (gửi qua /check_custom_text)
+
+Tùy chọn: Từ khóa do người dùng cung cấp
+
+2. Quy trình hoạt động
+Tiền xử lý văn bản
+
+Chuẩn hóa chữ thường, xóa ký tự thừa, lọc từ ngắn (<3 ký tự).
+
+Trích xuất nội dung từ file DOCX (nếu có).
+
+Trích xuất từ khóa
+
+Phân tách văn bản thành n-gram (cụm n từ liên tiếp, thường n=2).
+
+Đếm tần suất n-gram → chọn top 3 cụm từ phổ biến nhất làm từ khóa.
+
+Tìm kiếm tài liệu tham chiếu
+
+Gọi Wikipedia API với từ khóa để lấy 5 bài viết liên quan.
+
+Lọc nội dung chính (bỏ bảng, chú thích) bằng Cheerio.
+
+So sánh văn bản (Rabin-Karp)
+
+Chia văn bản thành các đoạn ký tự dài k (n-gram ký tự).
+
+Tính hash cho từng đoạn → so sánh số lượng hash trùng nhau giữa 2 văn bản.
+
+Điểm đạo văn = (số hash trùng) / (tổng hash).
+
+Đầu ra
+
+Danh sách bài viết Wikipedia sắp xếp theo điểm đạo văn giảm dần (0-1).
+
+Mỗi kết quả gồm: tiêu đề, URL, từ khóa, điểm tương đồng.
+
+3. Ưu điểm
+Nhanh: Rabin-Karp dùng rolling hash để tối ưu.
+
+Linh hoạt: Xử lý được cả file DOCX và văn bản thô.
+
+Chính xác: Dùng n-gram từ + n-gram ký tự để bắt cụm từ quan trọng.
+
+4. Hạn chế
+Chỉ so sánh với Wikipedia (thiếu nguồn khác như báo, blog).
+
+Không phát hiện được paraphrase (diễn đạt lại).
