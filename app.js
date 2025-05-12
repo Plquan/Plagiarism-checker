@@ -45,43 +45,56 @@ function modPow(base, exp, mod) {
 
 function computeHashes(text, k = DEFAULT_NGRAM_LENGTH, base = DEFAULT_BASE, mod = DEFAULT_MOD) {
   const n = text.length;
-  if (n < k) return new Set();
-  const hashSet = new Set();
+  if (n < k) return new Map();
+  const hashMap = new Map();
   let h = 0;
-  // initial hash
+
   for (let i = 0; i < k; i++) h = (h * base + text.charCodeAt(i)) % mod;
-  hashSet.add(h);
+  const firstGram = text.substring(0, k);
+  hashMap.set(h, new Set([firstGram]));
   const power = modPow(base, k - 1, mod);
-  // rolling
+
   for (let i = 1; i <= n - k; i++) {
     h = (h - text.charCodeAt(i - 1) * power) % mod;
     if (h < 0) h += mod;
     h = (h * base + text.charCodeAt(i + k - 1)) % mod;
-    hashSet.add(h);
+    const gram = text.substring(i, i + k);
+
+    if (!hashMap.has(h)) {
+      hashMap.set(h, new Set());
+    }
+    hashMap.get(h).add(gram);
   }
-  return hashSet;
+  return hashMap;
 }
 
 function plagiarismScore(text1, text2, k = DEFAULT_NGRAM_LENGTH, base = DEFAULT_BASE, mod = DEFAULT_MOD) {
   const t1 = preprocess(text1);
   const t2 = preprocess(text2);
-  const hashSet1 = computeHashes(t1, k, base, mod);
+  const hashMap1 = computeHashes(t1, k, base, mod);
   const n2 = t2.length;
   if (n2 < k) return 0.0;
   let matchCount = 0;
   const total = n2 - k + 1;
   let h = 0;
+  let gram = t2.substring(0, k);
   for (let i = 0; i < k; i++) h = (h * base + t2.charCodeAt(i)) % mod;
-  if (hashSet1.has(h)) matchCount++;
+
+  if (hashMap1.has(h) && hashMap1.get(h).has(gram)) matchCount++;
+
   const power = modPow(base, k - 1, mod);
+
   for (let i = 1; i < total; i++) {
     h = (h - t2.charCodeAt(i - 1) * power) % mod;
     if (h < 0) h += mod;
     h = (h * base + t2.charCodeAt(i + k - 1)) % mod;
-    if (hashSet1.has(h)) matchCount++;
+    gram = t2.substring(i, i + k);
+    if (hashMap1.has(h) && hashMap1.get(h).has(gram)) matchCount++;
   }
+
   return matchCount / total;
 }
+
 
 async function extractTextFromDocx(filePath) {
   const result = await mammoth.extractRawText({ path: filePath });
@@ -106,6 +119,8 @@ async function searchWikipedia(query, language = 'vi') {
     return [];
   }
 }
+
+// https://vi.wikipedia.org/w/index.php?search=phim%20ho%E1%BA%A1t%20ho%E1%BA%A1t%20h%C3%ACnh%20walt%20disney&ns0=1
 
 // Hàm mới: Trích xuất n-gram từ văn bản
 function extractNgrams(text, n = 2) {
@@ -148,12 +163,11 @@ function extractKeywords(text, n = 2, topK = 3) {
   return sortedNgrams.join(' ').substring(0, 100); // Giới hạn độ dài từ khóa
 }
 
-// Home
 app.get('/', (req, res) => {
   res.render('index', { title: 'Trang chủ', message: 'Kiểm tra đạo văn trực tuyến' });
 });
 
-// Check plagiarism (file)
+
 app.post('/check_plagiarism', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'Không có file được tải lên' });
@@ -164,10 +178,8 @@ app.post('/check_plagiarism', upload.single('file'), async (req, res) => {
     const inputText = await extractTextFromDocx(req.file.path);
     await fs.unlink(req.file.path);
 
-    // Sử dụng từ khóa tìm kiếm từ nội dung văn bản
     let keywords = req.body.keywords;
     
-    // Nếu không có từ khóa, trích xuất từ khóa dựa trên n-gram
     if (!keywords) {
       // Thử với bi-gram (n=2) trước
       keywords = extractKeywords(inputText, 2, 3);
@@ -177,10 +189,8 @@ app.post('/check_plagiarism', upload.single('file'), async (req, res) => {
       }
     }
     
-    // Tìm kiếm trên Wikipedia
     const wikipediaResults = await searchWikipedia(keywords);
     
-    // Lấy nội dung của các bài viết để so sánh
     const fullResults = [];
     for (const result of wikipediaResults) {
       const contentUrl = `https://vi.wikipedia.org/w/api.php?action=parse&pageid=${result.pageid}&prop=text&format=json&origin=*`;
@@ -194,7 +204,7 @@ app.post('/check_plagiarism', upload.single('file'), async (req, res) => {
           fullResults.push({
             source: result.url,
             title: result.title,
-            keywords: keywords, // Thêm từ khóa vào kết quả để người dùng biết
+            keywords: keywords,
             plagiarism_score: plagiarismScore(text, inputText)
           });
         }
@@ -211,7 +221,7 @@ app.post('/check_plagiarism', upload.single('file'), async (req, res) => {
   }
 });
 
-// Check custom text
+
 app.post('/check_custom_text', async (req, res) => {
   try {
     const { text, keywords } = req.body;
@@ -219,21 +229,16 @@ app.post('/check_custom_text', async (req, res) => {
       return res.status(400).json({ error: 'Cần cung cấp văn bản để kiểm tra' });
     }
     
-    // Sử dụng từ khóa được cung cấp hoặc trích xuất từ văn bản
     let searchKeywords = keywords;
     if (!searchKeywords) {
-      // Trích xuất từ khóa dựa trên n-gram
       searchKeywords = extractKeywords(text, 2, 3);
-      // Nếu không có kết quả, thử với từng từ riêng lẻ
       if (!searchKeywords) {
         searchKeywords = extractKeywords(text, 1, 5);
       }
     }
-    
-    // Tìm kiếm trên Wikipedia
+
     const wikipediaResults = await searchWikipedia(searchKeywords);
     
-    // Lấy nội dung của các bài viết để so sánh
     const fullResults = [];
     for (const result of wikipediaResults) {
       const contentUrl = `https://vi.wikipedia.org/w/api.php?action=parse&pageid=${result.pageid}&prop=text&format=json&origin=*`;
