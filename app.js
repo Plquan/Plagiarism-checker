@@ -7,7 +7,7 @@ const mammoth       = require('mammoth');
 const cors          = require('cors');
 const axios         = require('axios');
 const cheerio       = require('cheerio');
-
+// quan ngu
 const DOCUMENTS_FOLDER = path.join(__dirname, 'documents');
 const UPLOADS_FOLDER   = path.join(__dirname, 'uploads');
 const app = express();
