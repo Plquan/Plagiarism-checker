@@ -2,14 +2,11 @@ const express       = require('express');
 const multer        = require('multer');
 const path          = require('path');
 const fs            = require('fs').promises;
-const fsSync        = require('fs');
 const mammoth       = require('mammoth');
 const cors          = require('cors');
 const axios         = require('axios');
 const cheerio       = require('cheerio');
-// quan ngu
-const DOCUMENTS_FOLDER = path.join(__dirname, 'documents');
-const UPLOADS_FOLDER   = path.join(__dirname, 'uploads');
+
 const app = express();
 const PORT = 8000;
 
@@ -21,10 +18,6 @@ app.use(express.static('public'));
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
-// Ensure folders exist
-[DOCUMENTS_FOLDER, UPLOADS_FOLDER].forEach(dir => {
-  if (!fsSync.existsSync(dir)) fsSync.mkdirSync(dir, { recursive: true });
-});
 
 const upload = multer({ dest: UPLOADS_FOLDER });
 
@@ -43,6 +36,7 @@ function modPow(base, exp, mod) {
   return result;
 }
 
+//học
 function computeHashes(text, k = DEFAULT_NGRAM_LENGTH, base = DEFAULT_BASE, mod = DEFAULT_MOD) {
   const n = text.length;
   if (n < k) return new Map();
@@ -67,7 +61,7 @@ function computeHashes(text, k = DEFAULT_NGRAM_LENGTH, base = DEFAULT_BASE, mod 
   }
   return hashMap;
 }
-
+//học
 function plagiarismScore(text1, text2, k = DEFAULT_NGRAM_LENGTH, base = DEFAULT_BASE, mod = DEFAULT_MOD) {
   const t1 = preprocess(text1);
   const t2 = preprocess(text2);
@@ -95,20 +89,17 @@ function plagiarismScore(text1, text2, k = DEFAULT_NGRAM_LENGTH, base = DEFAULT_
   return matchCount / total;
 }
 
-
 async function extractTextFromDocx(filePath) {
   const result = await mammoth.extractRawText({ path: filePath });
   return result.value;
 }
 
-
-// Hàm tìm kiếm Wikipedia
 async function searchWikipedia(query, language = 'vi') {
   try {
     const searchUrl = `https://${language}.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&utf8=&origin=*`;
     const response = await axios.get(searchUrl);
     const searchResults = response.data.query.search;
-    return searchResults.slice(0, 5).map(result => ({
+    return searchResults.slice(0, 10).map(result => ({
       title: result.title,
       pageid: result.pageid,
       snippet: result.snippet,
@@ -120,14 +111,11 @@ async function searchWikipedia(query, language = 'vi') {
   }
 }
 
-// https://vi.wikipedia.org/w/index.php?search=phim%20ho%E1%BA%A1t%20ho%E1%BA%A1t%20h%C3%ACnh%20walt%20disney&ns0=1
-
-// Hàm mới: Trích xuất n-gram từ văn bản
 function extractNgrams(text, n = 2) {
   const words = text.toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, '') // giữ lại chữ cái, số và khoảng trắng
+    .replace(/[^\p{L}\p{N}\s]/gu, '')
     .split(/\s+/)
-    .filter(word => word.length > 3); // lọc các từ có ý nghĩa (>3 ký tự)
+    .filter(word => word.length > 3);
   
   if (words.length < n) return words;
   
@@ -138,7 +126,6 @@ function extractNgrams(text, n = 2) {
   return ngrams;
 }
 
-// Hàm mới: Đếm tần suất n-gram trong văn bản
 function countNgramFrequency(text, n = 2) {
   const ngrams = extractNgrams(text, n);
   const frequency = {};
@@ -150,23 +137,20 @@ function countNgramFrequency(text, n = 2) {
   return frequency;
 }
 
-// Hàm mới: Trích xuất từ khóa từ văn bản dựa trên n-gram phổ biến
 function extractKeywords(text, n = 2, topK = 3) {
   const frequency = countNgramFrequency(text, n);
   
-  // Sắp xếp theo tần suất và lấy top K n-gram phổ biến nhất
   const sortedNgrams = Object.entries(frequency)
     .sort((a, b) => b[1] - a[1])
     .slice(0, topK)
     .map(entry => entry[0]);
   
-  return sortedNgrams.join(' ').substring(0, 100); // Giới hạn độ dài từ khóa
+  return sortedNgrams.join(' ').substring(0, 100);
 }
 
 app.get('/', (req, res) => {
   res.render('index', { title: 'Trang chủ', message: 'Kiểm tra đạo văn trực tuyến' });
 });
-
 
 app.post('/check_plagiarism', upload.single('file'), async (req, res) => {
   try {
@@ -181,9 +165,7 @@ app.post('/check_plagiarism', upload.single('file'), async (req, res) => {
     let keywords = req.body.keywords;
     
     if (!keywords) {
-      // Thử với bi-gram (n=2) trước
       keywords = extractKeywords(inputText, 2, 3);
-      // Nếu không có kết quả, thử với từng từ riêng lẻ
       if (!keywords) {
         keywords = extractKeywords(inputText, 1, 5);
       }
@@ -213,14 +195,16 @@ app.post('/check_plagiarism', upload.single('file'), async (req, res) => {
       }
     }
     
+    // Sort by plagiarism_score and take top 5
     fullResults.sort((a, b) => b.plagiarism_score - a.plagiarism_score);
-    res.json({ results: fullResults });
+    const topResults = fullResults.slice(0, 5);
+    
+    res.json({ results: topResults });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Đã có lỗi xảy ra: ' + err.message });
   }
 });
-
 
 app.post('/check_custom_text', async (req, res) => {
   try {
@@ -261,8 +245,11 @@ app.post('/check_custom_text', async (req, res) => {
       }
     }
     
+    // Sort by plagiarism_score and take top 5
     fullResults.sort((a, b) => b.plagiarism_score - a.plagiarism_score);
-    res.json({ results: fullResults });
+    const topResults = fullResults.slice(0, 5);
+    
+    res.json({ results: topResults });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Đã có lỗi xảy ra: ' + err.message });
